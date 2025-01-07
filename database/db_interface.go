@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"telegram_bot/models"
@@ -17,8 +18,24 @@ type DBInterface interface {
 	UpdateTaskStatus(ctx context.Context, taskID int64, status string) error
 	SetTempData(ctx context.Context, userID int64, key string, value interface{}) error
 	GetTempData(ctx context.Context, userID int64, key string) (interface{}, error)
-	GetAvailableTaskByType(ctx context.Context, taskType string) ([]*models.Task, error)
+	GetAvailableTaskByType(ctx context.Context, taskType string) (*models.Task, error)
 	AssignTaskToUser(ctx context.Context, taskID, userID int64) error
 	SetUserState(ctx context.Context, userID int64, state string) error
 	GetUserState(ctx context.Context, userID int64) (string, error)
+
+	GetUserByID(ctx context.Context, telegramID int64) (*models.User, error)
+	SetUserBalance(ctx context.Context, telegramID int64, newBalance float64) error
+
+	SetTaskStatus(ctx context.Context, taskID int64, status string) error
+	GetPendingTasks(ctx context.Context) ([]*models.Task, error)
+	DeleteTempData(ctx context.Context, userID int64, key string) error
+
+	Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row
+	Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+
+	GetUserReferralCount(ctx context.Context, userID int64) (int, error)
+	GetCompletedTasksCount(ctx context.Context, userID int64) (int, error)
+
+	SaveUserTaskScreenshot(ctx context.Context, userID int64, fileID string) error
 }

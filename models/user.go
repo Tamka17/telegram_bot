@@ -7,4 +7,5 @@ type User struct {
 	Username   string
 	Balance    float64
 	CreatedAt  string
+	ReferrerID *int64
 }

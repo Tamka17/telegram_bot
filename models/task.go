@@ -2,10 +2,11 @@
 package models
 
 type Task struct {
-	ID          int
-	Category    string
-	Description string
-	Link        string
-	IsActive    bool
-	CreatedAt   string
+	ID               int
+	Category         string
+	Description      string
+	Link             string
+	IsActive         bool
+	CreatedAt        string
+	ScreenshotFileID string
 }

@@ -233,11 +233,23 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 		return
 	}
 
-	// Обработка полученного скриншота
-	// Например, сохранение файла или его ID
+	// Получение FileID самого большого размера фотографии
 	fileID := photo[len(photo)-1].FileID
-	// Сохраните fileID в базе данных, связав его с текущим заданием пользователя
-	err := h.DB.SaveUserTaskScreenshot(ctx, update.Message.From.ID, fileID)
+
+	// Получение объекта File от Telegram
+	file, err := h.Bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	if err != nil {
+		log.Println("Ошибка при получении файла:", err)
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось получить файл скриншота. Попробуйте снова.")
+		h.Bot.Send(msg)
+		return
+	}
+
+	// Получение ссылки на файл
+	fileURL := file.Link(h.Bot.Token)
+
+	// Сохранение fileID в базе данных, связав его с текущим заданием пользователя
+	err = h.DB.SaveUserTaskScreenshot(ctx, update.Message.From.ID, fileID)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось сохранить скриншот. Попробуйте снова.")
 		h.Bot.Send(msg)
@@ -245,27 +257,26 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 	}
 
 	// Сброс состояния пользователя
-	h.DB.SetUserState(ctx, update.Message.From.ID, "")
+	err = h.DB.SetUserState(ctx, update.Message.From.ID, "")
+	if err != nil {
+		log.Println("Ошибка при сбросе состояния пользователя:", err)
+		// Можно отправить сообщение пользователю или продолжить
+	}
 
 	// Переход к следующему шагу
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Скриншот получен! Можете переходить к следующему шагу.")
 	h.Bot.Send(msg)
 
-	// Сохранение файла локально или на облачном хранилище
-	// Здесь сохраняем локально
-	/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	fileURLe := file.Link(h.Bot.Token)
-
 	// Получение user_id и task_id
 	var userID, taskID, currentStage int
-	err = h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRow(ctx, ` 
         SELECT user_tasks.user_id, user_tasks.task_id, user_tasks.current_stage
         FROM user_tasks
         JOIN users ON users.id = user_tasks.user_id
         WHERE users.telegram_id = $1 AND user_tasks.status = 'in_progress'
         ORDER BY user_tasks.last_updated DESC
         LIMIT 1
-    `, update.Message.From.ID).Scan(&userID, &taskID, &currentStage)
+   `, update.Message.From.ID).Scan(&userID, &taskID, &currentStage)
 	if err != nil {
 		log.Println("Ошибка при получении user_id и task_id:", err)
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось найти активное задание.")
@@ -290,7 +301,7 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 		}
 	}
 
-	screenshots = append(screenshots, fileURLe)
+	screenshots = append(screenshots, fileURL)
 	screenshotsJSON, err := json.Marshal(screenshots)
 	if err != nil {
 		log.Println("Ошибка при кодировании скриншотов:", err)
@@ -302,7 +313,9 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 		log.Println("Ошибка при обновлении скриншотов:", err)
 		return
 	}
-} ///////////////////////////////////////////////////
+}
+
+///////////////////////////////////////////////////
 
 func (h *Handler) ShowCompletedTasks(ctx context.Context, chatID int64, telegramID int64) {
 	var userID int
@@ -382,13 +395,13 @@ func (h *Handler) HandleTaskTypeSelection(ctx context.Context, update tgbotapi.U
 	if taskType == "Назад" {
 		// Возврат в главное меню
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Главное меню:")
-		msg.ReplyMarkup = keyboard
+		msg.ReplyMarkup = h.AdminMenu // Используем h.AdminMenu вместо keyboard
 		h.Bot.Send(msg)
 		h.DB.SetUserState(ctx, update.Message.From.ID, "")
 		return
 	}
 
-	// Проверка доступности заданий данного типа
+	// Получение доступных заданий данного типа
 	task, err := h.DB.GetAvailableTaskByType(ctx, taskType)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "К сожалению, задания этого типа недоступны. Попробуйте выбрать другой тип.")
@@ -396,8 +409,14 @@ func (h *Handler) HandleTaskTypeSelection(ctx context.Context, update tgbotapi.U
 		return
 	}
 
+	if task == nil {
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Нет доступных заданий данного типа.")
+		h.Bot.Send(msg)
+		return
+	}
+
 	// Назначение задания пользователю
-	err = h.DB.AssignTaskToUser(ctx, update.Message.From.ID, task.ID)
+	err = h.DB.AssignTaskToUser(ctx, update.Message.From.ID, int64(task.ID))
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при назначении задания. Попробуйте позже.")
 		h.Bot.Send(msg)
@@ -408,17 +427,14 @@ func (h *Handler) HandleTaskTypeSelection(ctx context.Context, update tgbotapi.U
 	h.DB.SetUserState(ctx, update.Message.From.ID, "")
 
 	// Отправка задания пользователю
-	taskMessage := fmt.Sprintf("Ваше задание:\n\n%s", task.Description)
+	taskMessage := fmt.Sprintf("Ваше задание:\n\n%s", task.Category)
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, taskMessage)
 	h.Bot.Send(msg)
-
-	// Установка следующего состояния, если необходимо
-	// ...
 }
 
 func (h *Handler) ApproveTask(ctx context.Context, taskID int) {
 	// Получение задания из базы данных
-	task, err := h.DB.GetTaskByID(ctx, taskID)
+	task, err := h.DB.GetTaskByID(ctx, int64(taskID))
 	if err != nil {
 		// Обработка ошибки
 		return
@@ -436,29 +452,28 @@ func (h *Handler) ApproveTask(ctx context.Context, taskID int) {
 	}
 
 	// Начисление вознаграждения пользователю
-	err = h.DB.UpdateUserBalance(ctx, task.UserID, reward)
+	err = h.DB.UpdateUserBalance(ctx, int64(task.ID), reward)
 	if err != nil {
 		// Обработка ошибки
 		return
 	}
 
 	// Обновление статуса задания
-	err = h.DB.UpdateTaskStatus(ctx, taskID, "Approved")
+	err = h.DB.UpdateTaskStatus(ctx, int64(task.ID), "Approved")
 	if err != nil {
 		// Обработка ошибки
 		return
 	}
 
 	// Уведомление пользователя
-	msg := tgbotapi.NewMessage(task.UserChatID, "Ваше задание одобрено! Вам начислено "+fmt.Sprintf("%.2f", reward)+" руб.")
+	msg := tgbotapi.NewMessage(int64(task.ID), "Ваше задание одобрено! Вам начислено "+fmt.Sprintf("%.2f", reward)+" руб.")
 	h.Bot.Send(msg)
 }
 
 func (h *Handler) StartTaskStep(ctx context.Context, update tgbotapi.Update, delay time.Duration) {
-	availableAt := time.Now().Add(delay)
 
 	// Сохранение времени доступности следующего шага
-	h.DB.SetUserAvailableAt(ctx, update.Message.From.ID, availableAt)
+	h.DB.SetUserAvailableAt(ctx, update.Message.From.ID)
 
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Следующий шаг будет доступен через %v минут.", delay.Minutes()))
 	h.Bot.Send(msg)

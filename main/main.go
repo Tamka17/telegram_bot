@@ -22,8 +22,9 @@ func main() {
 	}
 
 	// Инициализация БД
-	InitDB()
-	defer CloseDB()
+	database.InitDB()
+
+	defer database.CloseDB()
 
 	// Получение токена из переменных окружения
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
@@ -45,7 +46,7 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 
-	DB := database.NewDatabase(dbPool)
+	Database := database.NewDatabase(*&database.InitDB().Pool)
 
 	// Определение администраторов (можно извлекать из базы данных)
 	admins := map[int64]bool{
@@ -55,12 +56,10 @@ func main() {
 	}
 
 	handler := handlers.Handler{
-		DB:     db,
+		DB:     Database,
 		Bot:    bot,
 		Admins: admins,
 	}
-
-	handler = handler.NewHandler(bot, DB, admins)
 
 	for update := range updates {
 		if update.Message != nil {
@@ -100,10 +99,12 @@ func main() {
 			}
 
 			// Обработка обычных текстовых сообщений
+			chatID := update.Message.Chat.ID
+			telegramID := update.Message.From.ID
 			text := update.Message.Text
 
 			// Проверка, является ли пользователь администратором
-			if userID == admins {
+			if handler.Admins[userID] {
 				switch text {
 				case "Добавить задание":
 					handler.HandleAdminAddTask(ctx, update)
@@ -111,7 +112,7 @@ func main() {
 					handler.HandleAdminCheckTasks(ctx, update)
 				case "Главное меню":
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Главное меню:")
-					msg.ReplyMarkup = handlers.AdminMenu
+					msg.ReplyMarkup = handler.AdminMenu
 					handler.Bot.Send(msg)
 				default:
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неизвестная команда. Пожалуйста, выберите действие из меню.")
@@ -123,7 +124,7 @@ func main() {
 			// Обработка сообщений обычных пользователей
 			switch text {
 			case "Показать баланс":
-				handler.ShowBalance(ctx, update)
+				handler.ShowBalance(ctx, chatID, telegramID)
 			case "Личный кабинет":
 				handler.HandleShowAccount(ctx, update)
 			case "Взять задание":

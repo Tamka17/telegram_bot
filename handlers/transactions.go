@@ -77,7 +77,6 @@ func (h *Handler) HandleNextTaskStep(ctx context.Context, update tgbotapi.Update
 	// ...
 }
 
-func (h *Handler) StartWaitingPeriod(ctx context.Context, userID int, delay time.Duration) {
-	availableAt := time.Now().Add(delay)
-	h.DB.SetUserAvailableAt(ctx, userID, availableAt)
+func (h *Handler) StartWaitingPeriod(ctx context.Context, userID int64, delay time.Duration) {
+	h.DB.SetUserAvailableAt(ctx, userID)
 }

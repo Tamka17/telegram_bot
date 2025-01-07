@@ -255,7 +255,7 @@ func (h *Handler) HandleAdminTaskCategorySelection(ctx context.Context, update t
 
 	if category == "Отменить добавление" {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Добавление задания отменено.")
-		msg.ReplyMarkup = AdminMenu
+		msg.ReplyMarkup = h.AdminMenu
 		h.Bot.Send(msg)
 		h.DB.SetUserState(ctx, update.Message.From.ID, "")
 		return
@@ -277,11 +277,28 @@ func (h *Handler) HandleAdminTaskDescriptionReceived(ctx context.Context, update
 	adminID := update.Message.From.ID
 
 	// Получение сохраненной категории
-	category, _ := h.DB.GetTempData(ctx, adminID, "new_task_category")
+	category, err := h.DB.GetTempData(ctx, adminID, "new_task_category")
+	if err != nil {
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось получить категорию задания. Попробуйте снова.")
+		if _, err := h.Bot.Send(msg); err != nil {
+			log.Printf("Ошибка при отправке сообщения: %v", err)
+		}
+		return
+	}
+
+	// Приведение типа interface{} к string
+	categoryStr, ok := category.(string)
+	if !ok {
+		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка: Некорректный тип категории.")
+		if _, err := h.Bot.Send(msg); err != nil {
+			log.Printf("Ошибка при отправке сообщения: %v", err)
+		}
+		return
+	}
 
 	// Создание задания в базе данных
 	newTask := models.Task{
-		Category:    category,
+		Category:    categoryStr,
 		Description: description,
 		IsActive:    true,
 		CreatedAt:   time.Now().Format("2006-01-02 15:04:05"),
@@ -289,21 +306,29 @@ func (h *Handler) HandleAdminTaskDescriptionReceived(ctx context.Context, update
 	}
 
 	// Сохранение задания в базе данных
-	err := h.DB.CreateTask(ctx, newTask)
+	err = h.DB.CreateTask(ctx, &newTask)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Попробуйте позже.")
-		h.Bot.Send(msg)
+		if _, err := h.Bot.Send(msg); err != nil {
+			log.Printf("Ошибка при отправке сообщения: %v", err)
+		}
 		return
 	}
 
 	// Уведомление об успешном добавлении задания
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Задание успешно добавлено!")
-	msg.ReplyMarkup = Handlers.AdminMenu
-	h.Bot.Send(msg)
+	msg.ReplyMarkup = h.AdminMenu
+	if _, err := h.Bot.Send(msg); err != nil {
+		log.Printf("Ошибка при отправке сообщения: %v", err)
+	}
 
 	// Сброс состояния и временных данных
-	h.DB.SetUserState(ctx, adminID, "")
-	h.DB.DeleteTempData(ctx, adminID, "new_task_category")
+	if err := h.DB.SetUserState(ctx, adminID, ""); err != nil {
+		log.Printf("Ошибка при сбросе состояния пользователя: %v", err)
+	}
+	if err := h.DB.DeleteTempData(ctx, adminID, "new_task_category"); err != nil {
+		log.Printf("Ошибка при удалении временных данных: %v", err)
+	}
 }
 
 func (h *Handler) HandleAdminCheckTasks(ctx context.Context, update tgbotapi.Update) {
@@ -319,7 +344,7 @@ func (h *Handler) HandleAdminCheckTasks(ctx context.Context, update tgbotapi.Upd
 			"👤 *Пользователь:* %d\n"+
 				"📄 *Задание:* %s\n"+
 				"📝 *Описание:* %s",
-			task.UserID,
+			task.ID,
 			task.Category,
 			task.Description,
 		)

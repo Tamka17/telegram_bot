@@ -63,7 +63,7 @@ func (h *Handler) HandleCardNumberReceived(ctx context.Context, update tgbotapi.
 		return
 	}
 
-	if user.Balance <= 0 {
+	if user.Balance <= 400 {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "У вас недостаточно средств для вывода.")
 		h.Bot.Send(msg)
 		return

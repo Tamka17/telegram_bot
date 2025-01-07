@@ -11,9 +11,10 @@ import (
 )
 
 type Handler struct {
-	Bot    *tgbotapi.BotAPI
-	Admins map[int64]bool
-	DB     database.DBInterface
+	Bot       *tgbotapi.BotAPI
+	Admins    map[int64]bool
+	DB        database.DBInterface
+	AdminMenu tgbotapi.ReplyKeyboardMarkup
 }
 
 // Конструктор для Handler
@@ -99,7 +100,7 @@ func (h *Handler) HandleShowAccount(ctx context.Context, update tgbotapi.Update)
 	userID := update.Message.From.ID
 
 	// Получение данных пользователя из базы данных
-	user, err := h.DB.GetUserByTelegramID(ctx, userID)
+	user, err := h.DB.GetUserByID(ctx, userID)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при получении ваших данных. Пожалуйста, попробуйте позже.")
 		h.Bot.Send(msg)
