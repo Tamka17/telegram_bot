@@ -13,13 +13,15 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
+////////////
+
 func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) {
 	telegramID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 
 	// Получение user_id
 	var userID int
-	err := h.DB.QueryRow(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
 	if err != nil {
 		log.Println("Ошибка при получении user ID:", err)
 		msg := tgbotapi.NewMessage(chatID, "Не удалось найти ваш профиль.")
@@ -29,7 +31,7 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 
 	// Проверка наличия незавершенного задания
 	var existingTaskID int
-	err = h.DB.QueryRow(ctx, "SELECT task_id FROM user_tasks WHERE user_id=$1 AND status != 'verified_correct' AND status != 'verified_incorrect'", userID).Scan(&existingTaskID)
+	err = h.DB.QueryRowContext(ctx, "SELECT task_id FROM user_tasks WHERE user_id=$1 AND status != 'verified_correct' AND status != 'verified_incorrect'", userID).Scan(&existingTaskID)
 	if err == nil {
 		msg := tgbotapi.NewMessage(chatID, "У вас уже есть незавершенное задание.")
 		h.Bot.Send(msg)
@@ -38,7 +40,7 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 
 	// Получение первого доступного задания
 	var taskID int
-	err = h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRowContext(ctx, `
         SELECT tasks.id FROM tasks
         LEFT JOIN user_tasks ON tasks.id = user_tasks.task_id
         WHERE tasks.is_active = TRUE
@@ -56,7 +58,7 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 	}
 
 	// Назначение задания пользователю
-	_, err = h.DB.Exec(ctx, `
+	_, err = h.DB.ExecContext(ctx, `
         INSERT INTO user_tasks (user_id, task_id, status)
         VALUES ($1, $2, 'in_progress')
     `, userID, taskID)
@@ -69,7 +71,7 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 
 	// Получение деталей задания
 	var description, link string
-	err = h.DB.QueryRow(ctx, "SELECT description, link FROM tasks WHERE id=$1", taskID).Scan(&description, &link)
+	err = h.DB.QueryRowContext(ctx, "SELECT description, link FROM tasks WHERE id=$1", taskID).Scan(&description, &link)
 	if err != nil {
 		log.Println("Ошибка при получении деталей задания:", err)
 		return
@@ -106,7 +108,7 @@ func (h *Handler) HandleTaskAction(ctx context.Context, update tgbotapi.Update) 
 
 	// Получение user_id
 	var userID int
-	err = h.DB.QueryRow(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
+	err = h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
 	if err != nil {
 		log.Println("Ошибка при получении user ID:", err)
 		return
@@ -118,7 +120,7 @@ func (h *Handler) HandleTaskAction(ctx context.Context, update tgbotapi.Update) 
 		h.SendTaskStage(ctx, callback.Message.Chat.ID, userID, taskID)
 	case "nextstage":
 		// Переход к следующему этапу
-		_, err = h.DB.Exec(ctx, "UPDATE user_tasks SET current_stage = current_stage + 1, last_updated = NOW() WHERE task_id=$1 AND user_id=$2", taskID, userID)
+		_, err = h.DB.ExecContext(ctx, "UPDATE user_tasks SET current_stage = current_stage + 1, last_updated = NOW() WHERE task_id=$1 AND user_id=$2", taskID, userID)
 		if err != nil {
 			log.Println("Ошибка при обновлении этапа задания:", err)
 			return
@@ -126,7 +128,7 @@ func (h *Handler) HandleTaskAction(ctx context.Context, update tgbotapi.Update) 
 
 		// Запуск таймеров при необходимости
 		var currentStage int
-		err = h.DB.QueryRow(ctx, "SELECT current_stage FROM user_tasks WHERE task_id=$1 AND user_id=$2", taskID, userID).Scan(&currentStage)
+		err = h.DB.QueryRowContext(ctx, "SELECT current_stage FROM user_tasks WHERE task_id=$1 AND user_id=$2", taskID, userID).Scan(&currentStage)
 		if err != nil {
 			log.Println("Ошибка при получении текущего этапа:", err)
 			return
@@ -157,7 +159,7 @@ func (h *Handler) HandleTaskAction(ctx context.Context, update tgbotapi.Update) 
 
 func (h *Handler) SendTaskStage(ctx context.Context, chatID int64, userID int, taskID int) {
 	var currentStage int
-	err := h.DB.QueryRow(ctx, "SELECT current_stage FROM user_tasks WHERE task_id=$1 AND user_id=$2", taskID, userID).Scan(&currentStage)
+	err := h.DB.QueryRowContext(ctx, "SELECT current_stage FROM user_tasks WHERE task_id=$1 AND user_id=$2", taskID, userID).Scan(&currentStage)
 	if err != nil {
 		log.Println("Ошибка при получении текущего этапа:", err)
 		return
@@ -174,7 +176,7 @@ func (h *Handler) SendTaskStage(ctx context.Context, chatID int64, userID int, t
 	default:
 		message = "Все этапы задания выполнены."
 		// Обновить статус задания на completed
-		_, err = h.DB.Exec(ctx, "UPDATE user_tasks SET status='completed', last_updated=NOW() WHERE task_id=$1 AND user_id=$2", taskID, userID)
+		_, err = h.DB.ExecContext(ctx, "UPDATE user_tasks SET status='completed', last_updated=NOW() WHERE task_id=$1 AND user_id=$2", taskID, userID)
 		if err != nil {
 			log.Println("Ошибка при обновлении статуса задания:", err)
 		}
@@ -193,7 +195,7 @@ func (h *Handler) SendTaskStage(ctx context.Context, chatID int64, userID int, t
 
 func (h *Handler) NotifyUserStage(ctx context.Context, userID int, taskID int, stage int) {
 	var telegramID int64
-	err := h.DB.QueryRow(ctx, "SELECT telegram_id FROM users WHERE id=$1", userID).Scan(&telegramID)
+	err := h.DB.QueryRowContext(ctx, "SELECT telegram_id FROM users WHERE id=$1", userID).Scan(&telegramID)
 	if err != nil {
 		log.Println("Ошибка при получении Telegram ID:", err)
 		return
@@ -215,7 +217,7 @@ func (h *Handler) NotifyUserStage(ctx context.Context, userID int, taskID int, s
 
 func (h *Handler) NotifyUserForVerification(ctx context.Context, userID int, taskID int) {
 	var telegramID int64
-	err := h.DB.QueryRow(ctx, "SELECT telegram_id FROM users WHERE id=$1", userID).Scan(&telegramID)
+	err := h.DB.QueryRowContext(ctx, "SELECT telegram_id FROM users WHERE id=$1", userID).Scan(&telegramID)
 	if err != nil {
 		log.Println("Ошибка при получении Telegram ID:", err)
 		return
@@ -269,7 +271,7 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 
 	// Получение user_id и task_id
 	var userID, taskID, currentStage int
-	err = h.DB.QueryRow(ctx, ` 
+	err = h.DB.QueryRowContext(ctx, ` 
         SELECT user_tasks.user_id, user_tasks.task_id, user_tasks.current_stage
         FROM user_tasks
         JOIN users ON users.id = user_tasks.user_id
@@ -287,7 +289,7 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 	// Обновление записи в базе данных с добавлением ссылки на скриншот
 	var screenshots []string
 	var screenshotsData []byte
-	err = h.DB.QueryRow(ctx, "SELECT screenshots FROM user_tasks WHERE user_id=$1 AND task_id=$2", userID, taskID).Scan(&screenshotsData)
+	err = h.DB.QueryRowContext(ctx, "SELECT screenshots FROM user_tasks WHERE user_id=$1 AND task_id=$2", userID, taskID).Scan(&screenshotsData)
 	if err != nil && err.Error() != "no rows in result set" {
 		log.Println("Ошибка при получении скриншотов:", err)
 		return
@@ -308,7 +310,7 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 		return
 	}
 
-	_, err = h.DB.Exec(ctx, "UPDATE user_tasks SET screenshots = $1 WHERE user_id=$2 AND task_id=$3", screenshotsJSON, userID, taskID)
+	_, err = h.DB.ExecContext(ctx, "UPDATE user_tasks SET screenshots = $1 WHERE user_id=$2 AND task_id=$3", screenshotsJSON, userID, taskID)
 	if err != nil {
 		log.Println("Ошибка при обновлении скриншотов:", err)
 		return
@@ -319,7 +321,7 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 
 func (h *Handler) ShowCompletedTasks(ctx context.Context, chatID int64, telegramID int64) {
 	var userID int
-	err := h.DB.QueryRow(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
 	if err != nil {
 		log.Println("Ошибка при получении user ID:", err)
 		msg := tgbotapi.NewMessage(chatID, "Не удалось найти ваш профиль.")
@@ -327,7 +329,7 @@ func (h *Handler) ShowCompletedTasks(ctx context.Context, chatID int64, telegram
 		return
 	}
 
-	rows, err := h.DB.Query(ctx, `
+	rows, err := h.DB.QueryContext(ctx, `
         SELECT tasks.description, user_tasks.status, user_tasks.last_updated
         FROM user_tasks
         JOIN tasks ON user_tasks.task_id = tasks.id

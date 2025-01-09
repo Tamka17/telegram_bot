@@ -8,5 +8,6 @@ type Task struct {
 	Link             string
 	IsActive         bool
 	CreatedAt        string
+	Status           string
 	ScreenshotFileID string
 }

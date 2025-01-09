@@ -30,9 +30,9 @@ type DBInterface interface {
 	GetPendingTasks(ctx context.Context) ([]*models.Task, error)
 	DeleteTempData(ctx context.Context, userID int64, key string) error
 
-	Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-	QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row
-	Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 
 	GetUserReferralCount(ctx context.Context, userID int64) (int, error)
 	GetCompletedTasksCount(ctx context.Context, userID int64) (int, error)

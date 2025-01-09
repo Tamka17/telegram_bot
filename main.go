@@ -11,6 +11,7 @@ import (
 	"telegram_bot/handlers"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 )
 
@@ -23,7 +24,6 @@ func main() {
 
 	// Инициализация БД
 	database.InitDB()
-
 	defer database.CloseDB()
 
 	// Получение токена из переменных окружения
@@ -46,7 +46,7 @@ func main() {
 
 	updates := bot.GetUpdatesChan(u)
 
-	Database := database.NewDatabase(*&database.InitDB().Pool)
+	Database := database.NewDatabase()
 
 	// Определение администраторов (можно извлекать из базы данных)
 	admins := map[int64]bool{
@@ -131,6 +131,8 @@ func main() {
 				handler.HandleAssignTask(ctx, update)
 			case "Вывести средства":
 				handler.HandleWithdrawRequest(ctx, update)
+			case "Обратиться в техподдержку":
+				handler.HandleSupport(ctx, update)
 			default:
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команда не распознана. Пожалуйста, выберите действие из меню.")
 				handler.Bot.Send(msg)
@@ -141,7 +143,7 @@ func main() {
 				if strings.HasPrefix(data, "starttask") || strings.HasPrefix(data, "nextstage") {
 					handler.HandleTaskAction(context.Background(), update)
 				} else if strings.HasPrefix(data, "verify") {
-					handler.HandleVerificationAction(context.Background(), update)
+					handler.HandleAdminCheckTasks(context.Background(), update)
 				}
 			}
 		}

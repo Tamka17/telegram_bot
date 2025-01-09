@@ -12,7 +12,7 @@ import (
 
 func (h *Handler) ShowTransactionHistory(ctx context.Context, chatID int64, telegramID int64) {
 	var userID int
-	err := h.DB.QueryRow(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
 	if err != nil {
 		log.Println("Ошибка при получении user ID:", err)
 		msg := tgbotapi.NewMessage(chatID, "Не удалось найти ваш профиль.")
@@ -20,7 +20,7 @@ func (h *Handler) ShowTransactionHistory(ctx context.Context, chatID int64, tele
 		return
 	}
 
-	rows, err := h.DB.Query(ctx, `
+	rows, err := h.DB.QueryContext(ctx, `
         SELECT amount, description, created_at
         FROM transactions
         WHERE user_id = $1

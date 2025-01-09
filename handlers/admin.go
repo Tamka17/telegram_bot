@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"telegram_bot/models"
 	"time"
@@ -39,7 +38,7 @@ func (h *Handler) AddTask(ctx context.Context, update tgbotapi.Update) {
 	description := taskParts[0]
 	link := taskParts[1]
 
-	_, err := h.DB.Exec(ctx, "INSERT INTO tasks (description, link) VALUES ($1, $2)", description, link)
+	_, err := h.DB.ExecContext(ctx, "INSERT INTO tasks (description, link) VALUES ($1, $2)", description, link)
 	if err != nil {
 		log.Println("Ошибка при добавлении задания:", err)
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Не удалось добавить задание.")
@@ -58,7 +57,7 @@ func (h *Handler) ViewCompletedTasks(ctx context.Context, update tgbotapi.Update
 		return
 	}
 
-	rows, err := h.DB.Query(ctx, `
+	rows, err := h.DB.QueryContext(ctx, `
         SELECT users.username, tasks.description, user_tasks.status, user_tasks.screenshots, user_tasks.id
         FROM user_tasks
         JOIN users ON user_tasks.user_id = users.id
@@ -101,110 +100,6 @@ func (h *Handler) ViewCompletedTasks(ctx context.Context, update tgbotapi.Update
 			photoMsg := tgbotapi.NewPhoto(update.Message.Chat.ID, tgbotapi.FileURL(screenshot))
 			h.Bot.Send(photoMsg)
 		}
-
-		// Добавляем кнопки для проверки задания
-		approveData := fmt.Sprintf("verify_%d_yes", userTaskID)
-		rejectData := fmt.Sprintf("verify_%d_no", userTaskID)
-		approveButton := tgbotapi.NewInlineKeyboardButtonData("Одобрить", approveData)
-		rejectButton := tgbotapi.NewInlineKeyboardButtonData("Отклонить", rejectData)
-		keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(approveButton, rejectButton))
-		msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Проверить задание:")
-		msg.ReplyMarkup = keyboard
-		go func() {
-			h.Bot.Send(msg)
-		}()
-	}
-}
-
-func (h *Handler) HandleVerificationAction(ctx context.Context, update tgbotapi.Update) {
-	callback := update.CallbackQuery
-	data := callback.Data
-
-	parts := strings.Split(data, "_")
-	if len(parts) < 3 {
-		return
-	}
-
-	action := parts[0]
-	userTaskIDStr := parts[1]
-	result := parts[2]
-	userTaskID, err := strconv.Atoi(userTaskIDStr)
-	if err != nil {
-		return
-	}
-
-	if action != "verify" {
-		return
-	}
-
-	// Получаем информацию по заданию
-	var userID int
-	var taskID int
-	var taskDescription string
-	err = h.DB.QueryRow(ctx, `
-        SELECT user_id, task_id, (SELECT description FROM tasks WHERE id = user_tasks.task_id)
-        FROM user_tasks
-        WHERE id = $1
-    `, userTaskID).Scan(&userID, &taskID, &taskDescription)
-	if err != nil {
-		log.Println("Ошибка при получении информации о задании:", err)
-		return
-	}
-
-	var telegramID int64
-	err = h.DB.QueryRow(ctx, "SELECT telegram_id FROM users WHERE id=$1", userID).Scan(&telegramID)
-	if err != nil {
-		log.Println("Ошибка при получении Telegram ID пользователя:", err)
-		return
-	}
-
-	if result == "yes" {
-		// Обновляем статус задания
-		_, err = h.DB.Exec(ctx, "UPDATE user_tasks SET status='verified_correct' WHERE id=$1", userTaskID)
-		if err != nil {
-			log.Println("Ошибка при обновлении статуса задания:", err)
-			return
-		}
-
-		// Добавляем выплату
-		amount := 10.0 // Пример суммы выплаты
-		_, err = h.DB.Exec(ctx, "UPDATE users SET balance = balance + $1 WHERE id=$2", amount, userID)
-		if err != nil {
-			log.Println("Ошибка при обновлении баланса пользователя:", err)
-			return
-		}
-
-		// Добавляем транзакцию
-		_, err = h.DB.Exec(ctx, "INSERT INTO transactions (user_id, amount, description) VALUES ($1, $2, $3)", userID, amount, "Выплата за задание")
-		if err != nil {
-			log.Println("Ошибка при добавлении транзакции:", err)
-			return
-		}
-
-		// Уведомляем пользователя
-		msg := tgbotapi.NewMessage(telegramID, "Задание выполнено правильно, вы получили выплату.")
-		h.Bot.Send(msg)
-	} else if result == "no" {
-		// Обновляем статус задания
-		_, err = h.DB.Exec(ctx, "UPDATE user_tasks SET status='verified_incorrect' WHERE id=$1", userTaskID)
-		if err != nil {
-			log.Println("Ошибка при обновлении статуса задания:", err)
-			return
-		}
-
-		// Уведомляем пользователя
-		msg := tgbotapi.NewMessage(telegramID, "Задание выполнено неправильно, выплата не производится.")
-		h.Bot.Send(msg)
-	}
-
-	// Ответ на callback
-	callbackConfig := tgbotapi.NewCallback(callback.ID, "Статус задания обновлен.")
-	h.Bot.Request(callbackConfig)
-
-	answer := tgbotapi.NewCallback(callback.ID, "Статус задания обновлён.")
-	_, err = h.Bot.Request(answer)
-	if err != nil {
-		log.Println("Ошибка при отправке ответа на CallbackQuery:", err)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 func (h *Handler) ShowBalance(ctx context.Context, chatID int64, telegramID int64) {
 	var balance float64
-	err := h.DB.QueryRow(ctx, "SELECT balance FROM users WHERE telegram_id=$1", telegramID).Scan(&balance)
+	err := h.DB.QueryRowContext(ctx, "SELECT balance FROM users WHERE telegram_id=$1", telegramID).Scan(&balance)
 	if err != nil {
 		log.Println("Ошибка при получении баланса:", err)
 		msg := tgbotapi.NewMessage(chatID, "Не удалось получить баланс.")
@@ -79,7 +79,7 @@ func (h *Handler) HandleCardNumberReceived(ctx context.Context, update tgbotapi.
 		user.Balance,
 		cardNumber,
 	)
-	adminMsg := tgbotapi.NewMessage(45464646, adminMessage)
+	adminMsg := tgbotapi.NewMessage(7113548539, adminMessage)
 	adminMsg.ParseMode = "Markdown"
 	h.Bot.Send(adminMsg)
 

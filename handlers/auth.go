@@ -31,10 +31,10 @@ func (h *Handler) Start(ctx context.Context, update tgbotapi.Update) {
 
 	// Проверка, есть ли пользователь в БД
 	var existingUserID int
-	err := h.DB.QueryRow(ctx, "SELECT id FROM users WHERE telegram_id=$1", user.ID).Scan(&existingUserID)
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", user.ID).Scan(&existingUserID)
 	if err != nil {
 		// Если пользователя нет, добавить его
-		_, err = h.DB.Exec(ctx, "INSERT INTO users (telegram_id, username) VALUES ($1, $2)", user.ID, user.UserName)
+		_, err = h.DB.ExecContext(ctx, "INSERT INTO users (telegram_id, username) VALUES ($1, $2)", user.ID, user.UserName)
 		if err != nil {
 			log.Println("Ошибка при добавлении пользователя:", err)
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
@@ -50,12 +50,11 @@ func (h *Handler) Start(ctx context.Context, update tgbotapi.Update) {
 			tgbotapi.NewKeyboardButton("Личный кабинет"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Взять задание"),
-			tgbotapi.NewKeyboardButton("Выполненные задания"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("Вывести средства"),
 			tgbotapi.NewKeyboardButton("Обратиться в техподдержку"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Взять задание"),
 		),
 	)
 
@@ -138,17 +137,10 @@ func (h *Handler) HandleShowAccount(ctx context.Context, update tgbotapi.Update)
 	)
 
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, accountInfo)
-	msg.ParseMode = "Markdown"
 
-	sentMsg, err := h.Bot.Send(msg)
-	if err != nil {
-		log.Printf("Ошибка при отправке сообщения: %v", err)
-		// Дополнительная обработка ошибки, например, уведомление администратора
-		return
-	}
+	h.Bot.Send(msg)
 
-	log.Printf("Сообщение отправлено успешно: %v", sentMsg.MessageID)
-
+	return
 }
 
 // Другие функции авторизации можно добавить здесь
