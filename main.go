@@ -9,6 +9,7 @@ import (
 
 	"telegram_bot/database"
 	"telegram_bot/handlers"
+	"telegram_bot/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -49,22 +50,17 @@ func main() {
 	Database := database.NewDatabase()
 
 	// Определение администраторов (можно извлекать из базы данных)
-	admins := map[int64]bool{
-		790745265: true,
-		884539153: true,
-		908077320: true, // Замените на реальные Telegram ID администраторов
-	}
 
 	handler := handlers.Handler{
-		DB:     Database,
-		Bot:    bot,
-		Admins: admins,
+		DB:  Database,
+		Bot: bot,
 	}
 
 	for update := range updates {
 		if update.Message != nil {
 			ctx := context.Background()
 			userID := update.Message.From.ID
+			var user models.User
 
 			// Проверяем состояние пользователя
 			userState, _ := handler.DB.GetUserState(ctx, userID)
@@ -72,14 +68,7 @@ func main() {
 				handler.HandleCardNumberReceived(ctx, update)
 				continue
 			}
-			if userState == "awaiting_task_type" {
-				handler.HandleTaskTypeSelection(ctx, update)
-				continue
-			}
-			if userState == "awaiting_screenshot" {
-				handler.HandleScreenshot(ctx, update)
-				continue
-			}
+
 			// Добавьте другие состояния по необходимости
 
 			// Обработка команд
@@ -87,12 +76,9 @@ func main() {
 				switch update.Message.Command() {
 				case "start":
 					handler.Start(ctx, update)
-				case "addtask":
-					handler.HandleAdminCommands(ctx, update)
-				case "viewcompletedtasks":
-					handler.HandleAdminCommands(ctx, update)
 				default:
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неизвестная команда.")
+					msg.ReplyMarkup = handler.AdminMenu
 					handler.Bot.Send(msg)
 				}
 				continue
@@ -104,7 +90,7 @@ func main() {
 			text := update.Message.Text
 
 			// Проверка, является ли пользователь администратором
-			if handler.Admins[userID] {
+			if user.Admin {
 				switch text {
 				case "Добавить задание":
 					handler.HandleAdminAddTask(ctx, update)
@@ -116,6 +102,7 @@ func main() {
 					handler.Bot.Send(msg)
 				default:
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неизвестная команда. Пожалуйста, выберите действие из меню.")
+					msg.ReplyMarkup = handler.AdminMenu
 					handler.Bot.Send(msg)
 				}
 				continue
@@ -135,6 +122,7 @@ func main() {
 				handler.HandleSupport(ctx, update)
 			default:
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Команда не распознана. Пожалуйста, выберите действие из меню.")
+				msg.ReplyMarkup = handler.Keyboard
 				handler.Bot.Send(msg)
 			}
 

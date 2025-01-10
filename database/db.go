@@ -12,7 +12,6 @@ import (
 	"telegram_bot/models"
 	"time"
 
-	"github.com/jackc/pgx/v4"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
 )
@@ -20,7 +19,10 @@ import (
 var dbInstance *Database
 
 type Database struct {
-	sqlDB *sql.DB
+	sqlDB      *sql.DB
+	userStates map[int64]models.State
+	tempData   map[int64]map[string]interface{}
+	tasks      []models.Task
 }
 
 // InitDB - инициализатор базы данных (конструктор синглтона)
@@ -62,7 +64,13 @@ func NewDatabase() *Database {
 	}
 
 	log.Println("Подключение к PostgreSQL установлено успешно!")
-	return &Database{sqlDB: sqlDB}
+	return &Database{
+
+		userStates: make(map[int64]models.State),
+		tempData:   make(map[int64]map[string]interface{}),
+		tasks:      []models.Task{},
+		sqlDB:      sqlDB,
+	}
 }
 
 // CloseDB - метод для закрытия подключения к базе данных
@@ -92,23 +100,6 @@ func (db *Database) SetTaskStatus(ctx context.Context, taskID int64, status stri
 	return nil
 }
 
-func (db *Database) GetUserByID(ctx context.Context, telegramID int64) (*models.User, error) {
-	query := "SELECT id, telegram_id, balance FROM users WHERE telegram_id = $1"
-
-	row := db.sqlDB.QueryRowContext(ctx, query, telegramID)
-
-	var user models.User
-	err := row.Scan(&user.ID, &user.TelegramID, &user.Balance)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // Пользователь не найден
-		}
-		return nil, err
-	}
-
-	return &models.User{}, nil
-}
-
 func (db *Database) SetUserBalance(ctx context.Context, telegramID int64, newBalance float64) error {
 	query := "UPDATE users SET balance = $1 WHERE telegram_id = $2"
 
@@ -133,14 +124,17 @@ func (db *Database) SetUserBalance(ctx context.Context, telegramID int64, newBal
 func (db *Database) GetUserByTelegramID(ctx context.Context, telegramID int64) (*models.User, error) {
 	user := &models.User{}
 	query := `
-    SELECT id, telegram_id, username, balance, state, available_at, created_at, updated_at 
+    SELECT id, telegram_id, admin, username, balance, state, available_at, created_at, referrerID 
               FROM users WHERE telegram_id = $1
               `
 	err := db.sqlDB.QueryRowContext(ctx, query, telegramID).Scan(
 		&user.ID,
 		&user.TelegramID,
+		&user.Admin,
 		&user.Username,
 		&user.Balance,
+		&user.State,
+		&user.AvailableAt,
 		&user.CreatedAt,
 		&user.ReferrerID,
 	)
@@ -158,10 +152,13 @@ func (db *Database) CreateUser(ctx context.Context, user *models.User) error {
               `
 	return db.sqlDB.QueryRowContext(ctx, query,
 		user.TelegramID,
+		user.Admin,
 		user.Username,
 		user.Balance,
-		user.State, // Убедитесь, что поле существует в struct User
+		user.State,
 		user.AvailableAt,
+		user.CreatedAt,
+		user.ReferrerID,
 	).Scan(&user.ID)
 }
 
@@ -230,31 +227,30 @@ func (db *Database) GetUserAvailableAt(ctx context.Context, telegramID int64) (t
 // CreateTask создает новое задание
 func (db *Database) CreateTask(ctx context.Context, task *models.Task) error {
 	query := `
-    INSERT INTO tasks (description, link, type, is_active, created_at, updated_at)
-              VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id
+    INSERT INTO tasks (category, description, link, type, is_active, created_at, status, screenshot_file_id)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			  RETURNING id
               `
-	return db.sqlDB.QueryRowContext(ctx, query,
-		task.Description,
-		task.Link,
-		task.Category,
-		task.IsActive,
-	).Scan(&task.ID)
+	return db.sqlDB.QueryRowContext(ctx, query, task.Category, task.Description, task.Link, task.IsActive, task.CreatedAt, task.Status, task.ScreenshotFileID).Scan(&task.ID)
 }
 
 // GetTaskByID получает задание по его ID
 func (db *Database) GetTaskByID(ctx context.Context, taskID int64) (*models.Task, error) {
 	task := &models.Task{}
 	query := `
-    SELECT id, description, link, type, is_active, created_at, updated_at 
+    SELECT id, user_id, category, description, link, type, is_active, created_at, status, screenshot_file_id  
               FROM tasks WHERE id = $1
               `
 	err := db.sqlDB.QueryRowContext(ctx, query, taskID).Scan(
 		&task.ID,
+		&task.UserID,
+		&task.Category,
 		&task.Description,
 		&task.Link,
-		&task.Category,
 		&task.IsActive,
 		&task.CreatedAt,
+		&task.Status,
+		&task.ScreenshotFileID,
 	)
 	if err != nil {
 		return nil, err
@@ -263,9 +259,9 @@ func (db *Database) GetTaskByID(ctx context.Context, taskID int64) (*models.Task
 }
 
 // UpdateTaskStatus обновляет статус задания
-func (db *Database) UpdateTaskStatus(ctx context.Context, taskID int64, isActive string) error {
+func (db *Database) UpdateTaskStatus(ctx context.Context, taskID int64, status models.Status) error {
 	query := "UPDATE tasks SET is_active = $1, updated_at = NOW() WHERE id = $2"
-	result, err := db.sqlDB.ExecContext(ctx, query, taskID, isActive)
+	result, err := db.sqlDB.ExecContext(ctx, query, taskID, status)
 	if err != nil {
 		return err
 	}
@@ -311,12 +307,12 @@ func (db *Database) UpdateUserBalance(ctx context.Context, userID int64, amount 
 	query := "UPDATE users SET balance = balance + $1, updated_at = NOW() WHERE id = $2"
 	result, err := db.sqlDB.ExecContext(ctx, query, amount, userID)
 	if err != nil {
-		return err
+		return fmt.Errorf("ошибка обновления баланса пользователя: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return fmt.Errorf("ошибка получения количества затронутых строк: %w", err)
 	}
 
 	if rowsAffected == 0 {
@@ -404,7 +400,7 @@ func (db *Database) DeleteTempData(ctx context.Context, userID int64, key string
 
 // GetPendingTasks возвращает список заданий со статусом "Pending".
 func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error) {
-	query := "SELECT id, user_id, category, description, is_active, created_at, status FROM tasks WHERE status = 'Pending'"
+	query := "SELECT id, user_id, category, description, is_active, created_at, status, link, screenshot_file_id FROM tasks WHERE status = 'Pending'"
 	rows, err := db.sqlDB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -414,7 +410,7 @@ func (db *Database) GetPendingTasks(ctx context.Context) ([]*models.Task, error)
 	var tasks []*models.Task
 	for rows.Next() {
 		var task models.Task
-		if err := rows.Scan(&task.ID, &task.ID, &task.Category, &task.Description, &task.IsActive, &task.CreatedAt, &task.Status, &task.Link); err != nil {
+		if err := rows.Scan(&task.ID, &task.UserID, &task.Category, &task.Description, &task.IsActive, &task.CreatedAt, &task.Status, &task.Link, &task.ScreenshotFileID); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, &task)
@@ -488,13 +484,17 @@ func (db *Database) CreateTransaction(ctx context.Context, tx *models.Transactio
 
 // Пример: Проверка, является ли пользователь администратором
 func (db *Database) IsAdmin(ctx context.Context, telegramID int64) (bool, error) {
-	var exists bool
-	query := "SELECT EXISTS(SELECT 1 FROM admins WHERE telegram_id = $1)"
-	err := db.sqlDB.QueryRowContext(ctx, query, telegramID).Scan(&exists)
+	var isAdmin bool
+	query := "SELECT admin FROM users WHERE telegram_id = $1"
+	err := db.sqlDB.QueryRowContext(ctx, query, telegramID).Scan(&isAdmin)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			// Пользователь не найден
+			return false, nil
+		}
 		return false, err
 	}
-	return exists, nil
+	return isAdmin, nil
 }
 
 func (db *Database) SaveUserTaskScreenshot(ctx context.Context, userID int64, fileID string) error {

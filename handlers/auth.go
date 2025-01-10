@@ -3,48 +3,78 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"telegram_bot/database"
+	"telegram_bot/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Handler struct {
-	Bot       *tgbotapi.BotAPI
-	Admins    map[int64]bool
-	DB        database.DBInterface
-	AdminMenu tgbotapi.ReplyKeyboardMarkup
+	Bot           *tgbotapi.BotAPI
+	DB            database.DBInterface
+	AdminMenu     tgbotapi.ReplyKeyboardMarkup
+	Keyboard      tgbotapi.ReplyKeyboardMarkup
+	AdminMenuTask tgbotapi.ReplyKeyboardMarkup
+	KeyboardTask  tgbotapi.ReplyKeyboardMarkup
 }
 
 // Конструктор для Handler
 func NewHandler(bot *tgbotapi.BotAPI, db database.DBInterface, admins map[int64]bool) *Handler {
+	// Инициализация админского меню задач
+	adminMenuTask := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(string(models.CategoryAvito)),
+			tgbotapi.NewKeyboardButton(string(models.CategoryYandex)),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton(string(models.CategoryGoogle)),
+			tgbotapi.NewKeyboardButton(string(models.Category2GIS)),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Отменить добавление"),
+		),
+	)
 	return &Handler{
-		Bot:    bot,
-		Admins: admins,
-		DB:     db,
+		Bot:           bot,
+		DB:            db,
+		AdminMenuTask: adminMenuTask,
 	}
 }
 
 func (h *Handler) Start(ctx context.Context, update tgbotapi.Update) {
-	user := update.Message.From
+	telegramUser := update.Message.From
+	chatID := update.Message.Chat.ID
 
-	// Проверка, есть ли пользователь в БД
-	var existingUserID int
-	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", user.ID).Scan(&existingUserID)
+	// Попытка получить пользователя из базы данных
+	var user models.User
+	err := h.DB.QueryRowContext(ctx, "SELECT id, telegram_id, admin FROM users WHERE telegram_id=$1", telegramUser.ID).
+		Scan(&user.ID, &user.TelegramID, &user.Admin)
 	if err != nil {
-		// Если пользователя нет, добавить его
-		_, err = h.DB.ExecContext(ctx, "INSERT INTO users (telegram_id, username) VALUES ($1, $2)", user.ID, user.UserName)
-		if err != nil {
-			log.Println("Ошибка при добавлении пользователя:", err)
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
+		if err == sql.ErrNoRows {
+			// Пользователь не найден, добавляем его в базу данных
+			_, err = h.DB.ExecContext(ctx, "INSERT INTO users (telegram_id, username, admin) VALUES ($1, $2, $3)", telegramUser.ID, telegramUser.UserName, false)
+			if err != nil {
+				log.Println("Ошибка при добавлении пользователя:", err)
+				msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при регистрации. Пожалуйста, попробуйте позже.")
+				h.Bot.Send(msg)
+				return
+			}
+			// Устанавливаем статус администратора в false
+			user.Admin = false
+		} else {
+			// Обработка других ошибок
+			log.Println("Ошибка при получении пользователя из базы данных:", err)
+			msg := tgbotapi.NewMessage(chatID, "Произошла ошибка. Пожалуйста, попробуйте позже.")
 			h.Bot.Send(msg)
 			return
 		}
 	}
 
 	// Создание клавиатуры
-	var keyboard = tgbotapi.NewReplyKeyboard(
+	var UserMenu = tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("Показать баланс"),
 			tgbotapi.NewKeyboardButton("Личный кабинет"),
@@ -63,31 +93,18 @@ func (h *Handler) Start(ctx context.Context, update tgbotapi.Update) {
 			tgbotapi.NewKeyboardButton("Добавить задание"),
 			tgbotapi.NewKeyboardButton("Проверить задания"),
 		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Главное меню"),
-		),
 	)
-
-	userID := update.Message.From.ID
 	var msg tgbotapi.MessageConfig
 
-	if h.IsAdmin(int64(userID)) {
-		msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Добро пожаловать, администратор!")
+	if user.Admin {
+		msg = tgbotapi.NewMessage(chatID, "Добро пожаловать, администратор!")
 		msg.ReplyMarkup = AdminMenu
 	} else {
-		msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Добро пожаловать!")
-		msg.ReplyMarkup = keyboard
+		msg = tgbotapi.NewMessage(chatID, "Добро пожаловать! Что вы хотите сделать?")
+		msg.ReplyMarkup = UserMenu
 	}
 
 	h.Bot.Send(msg)
-
-	msg = tgbotapi.NewMessage(update.Message.Chat.ID, "Добро пожаловать! Что вы хотите сделать?")
-	msg.ReplyMarkup = keyboard
-	h.Bot.Send(msg)
-}
-
-func (h *Handler) IsAdmin(telegramID int64) bool {
-	return h.Admins[telegramID]
 }
 
 func (h *Handler) HandleSupport(ctx context.Context, update tgbotapi.Update) {
@@ -99,7 +116,7 @@ func (h *Handler) HandleShowAccount(ctx context.Context, update tgbotapi.Update)
 	userID := update.Message.From.ID
 
 	// Получение данных пользователя из базы данных
-	user, err := h.DB.GetUserByID(ctx, userID)
+	user, err := h.DB.GetUserByTelegramID(ctx, userID)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при получении ваших данных. Пожалуйста, попробуйте позже.")
 		h.Bot.Send(msg)
@@ -139,8 +156,6 @@ func (h *Handler) HandleShowAccount(ctx context.Context, update tgbotapi.Update)
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, accountInfo)
 
 	h.Bot.Send(msg)
-
-	return
 }
 
 // Другие функции авторизации можно добавить здесь

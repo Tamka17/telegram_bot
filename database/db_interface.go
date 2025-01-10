@@ -15,7 +15,7 @@ type DBInterface interface {
 	SetUserAvailableAt(ctx context.Context, telegramID int64) error
 	GetTaskByID(ctx context.Context, taskID int64) (*models.Task, error)
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64) error
-	UpdateTaskStatus(ctx context.Context, taskID int64, status string) error
+	UpdateTaskStatus(ctx context.Context, taskID int64, status models.Status) error
 	SetTempData(ctx context.Context, userID int64, key string, value interface{}) error
 	GetTempData(ctx context.Context, userID int64, key string) (interface{}, error)
 	GetAvailableTaskByType(ctx context.Context, taskType string) (*models.Task, error)
@@ -23,7 +23,7 @@ type DBInterface interface {
 	SetUserState(ctx context.Context, userID int64, state string) error
 	GetUserState(ctx context.Context, userID int64) (string, error)
 
-	GetUserByID(ctx context.Context, telegramID int64) (*models.User, error)
+	GetUserByTelegramID(ctx context.Context, telegramID int64) (*models.User, error)
 	SetUserBalance(ctx context.Context, telegramID int64, newBalance float64) error
 
 	SetTaskStatus(ctx context.Context, taskID int64, status string) error

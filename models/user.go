@@ -6,10 +6,11 @@ import "time"
 type User struct {
 	ID          int
 	TelegramID  int64
+	Admin       bool
 	Username    string
 	Balance     float64
-	State       string
+	State       State
 	AvailableAt time.Time
-	CreatedAt   string
+	CreatedAt   time.Time
 	ReferrerID  *int64
 }

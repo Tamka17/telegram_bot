@@ -8,10 +8,25 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"telegram_bot/models"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
+
+func CalculateReward(category models.Category) float64 {
+	var rewardMap = map[models.Category]float64{
+		models.CategoryAvito:  130.0,
+		models.CategoryYandex: 25.0,
+		models.CategoryGoogle: 25.0,
+		models.Category2GIS:   25.0,
+	}
+
+	if reward, exists := rewardMap[category]; exists {
+		return reward
+	}
+	return 0.0
+}
 
 ////////////
 
@@ -57,18 +72,6 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 		return
 	}
 
-	// Назначение задания пользователю
-	_, err = h.DB.ExecContext(ctx, `
-        INSERT INTO user_tasks (user_id, task_id, status)
-        VALUES ($1, $2, 'in_progress')
-    `, userID, taskID)
-	if err != nil {
-		log.Println("Ошибка при назначении задания:", err)
-		msg := tgbotapi.NewMessage(chatID, "Не удалось назначить задание.")
-		h.Bot.Send(msg)
-		return
-	}
-
 	// Получение деталей задания
 	var description, link string
 	err = h.DB.QueryRowContext(ctx, "SELECT description, link FROM tasks WHERE id=$1", taskID).Scan(&description, &link)
@@ -77,14 +80,26 @@ func (h *Handler) HandleAssignTask(ctx context.Context, update tgbotapi.Update) 
 		return
 	}
 
-	taskMessage := fmt.Sprintf("%s\nСсылка: %s", description, link)
-	msg := tgbotapi.NewMessage(chatID, taskMessage)
+	KeyboardTask := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Авито"),
+			tgbotapi.NewKeyboardButton("Яндекс"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Гугл"),
+			tgbotapi.NewKeyboardButton("2GIS"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Назад"),
+		),
+	)
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите тип задания для выполнения:")
+	msg.ReplyMarkup = KeyboardTask
+	h.Bot.Send(msg)
 
-	// Добавление кнопки "Выполнить задание"
-	callbackData := fmt.Sprintf("starttask_%d", taskID)
-	button := tgbotapi.NewInlineKeyboardButtonData("Выполнить задание", callbackData)
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(button))
-	msg.ReplyMarkup = keyboard
+	// Установка состояния администратора
+	h.DB.SetUserState(context.Background(), update.Message.From.ID, string(models.StateawaitingTaskCategoryUser))
+
 	h.Bot.Send(msg)
 }
 
@@ -153,7 +168,7 @@ func (h *Handler) HandleTaskAction(ctx context.Context, update tgbotapi.Update) 
 	}
 
 	// Ответ на callback
-	callbackConfig := tgbotapi.NewCallback(callback.ID, "")
+	callbackConfig := tgbotapi.NewCallback(callback.ID, string(models.StateNone))
 	h.Bot.Request(callbackConfig)
 }
 
@@ -224,6 +239,180 @@ func (h *Handler) NotifyUserForVerification(ctx context.Context, userID int, tas
 	}
 
 	msg := tgbotapi.NewMessage(telegramID, "Ваше задание будет проверено в течение двух дней.")
+	h.Bot.Send(msg)
+}
+
+///////////////////////////////////////////////////
+
+func (h *Handler) ShowCompletedTasks(ctx context.Context, chatID int64, telegramID int64) {
+	var userID int
+	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
+	if err != nil {
+		log.Println("Ошибка при получении user ID:", err)
+		msg := tgbotapi.NewMessage(chatID, "Не удалось найти ваш профиль.")
+		h.Bot.Send(msg)
+		return
+	}
+
+	rows, err := h.DB.QueryContext(ctx, `
+        SELECT tasks.description, user_tasks.status, user_tasks.last_updated
+        FROM user_tasks
+        JOIN tasks ON user_tasks.task_id = tasks.id
+        WHERE user_tasks.user_id = $1 AND user_tasks.status = ANY($2)ORDER BY user_tasks.last_updated DESC
+        LIMIT 10
+    `, userID, []string{"verified_correct", "verified_incorrect", "completed"})
+	if err != nil {
+		log.Println("Ошибка при получении выполненных заданий:", err)
+		msg := tgbotapi.NewMessage(chatID, "Не удалось получить выполненные задания.")
+		h.Bot.Send(msg)
+		return
+	}
+	defer rows.Close()
+
+	var response string
+	for rows.Next() {
+		var description, status, lastUpdated string
+		err := rows.Scan(&description, &status, &lastUpdated)
+		if err != nil {
+			log.Println("Ошибка при сканировании задания:", err)
+			continue
+		}
+		response += fmt.Sprintf("Задание: %s\nСтатус: %s\nДата: %s\n\n", description, status, lastUpdated)
+	}
+
+	if response == "" {
+		response = "У вас нет выполненных заданий."
+	}
+
+	msg := tgbotapi.NewMessage(chatID, response)
+	h.Bot.Send(msg)
+}
+
+func (h *Handler) HandleShowCompletedTasks(ctx context.Context, update tgbotapi.Update) {
+	telegramID := update.Message.From.ID
+	chatID := update.Message.Chat.ID
+	h.ShowCompletedTasks(ctx, chatID, telegramID)
+}
+
+func (h *Handler) HandleSelectTaskType(ctx context.Context, update tgbotapi.Update) {
+	keyboard := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Авито"),
+			tgbotapi.NewKeyboardButton("Яндекс"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Гугл"),
+			tgbotapi.NewKeyboardButton("2GIS"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Назад"),
+		),
+	)
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите тип задания:")
+	msg.ReplyMarkup = keyboard
+	h.Bot.Send(msg)
+
+	// Установка состояния пользователя
+	h.DB.SetUserState(ctx, update.Message.From.ID, "awaiting_task_type")
+}
+
+func (h *Handler) HandleCallbackQuery(ctx context.Context, update tgbotapi.Update) {
+	callback := update.CallbackQuery
+	data := callback.Data
+
+	// Парсинг данных callback
+	parts := strings.SplitN(data, "_", 2)
+	if len(parts) != 2 {
+		h.sendCallbackResponse(callback.ID, "Некорректные данные.")
+		return
+	}
+
+	action := parts[0]
+	taskIDStr := parts[1]
+	taskID, err := strconv.Atoi(taskIDStr)
+	if err != nil {
+		h.sendCallbackResponse(callback.ID, "Некорректный ID задания.")
+		return
+	}
+
+	switch action {
+	case "approve":
+		// Получение задачи из базы данных для получения категории и вознаграждения
+		task, err := h.DB.GetTaskByID(ctx, int64(taskID))
+		if err != nil {
+			h.sendCallbackResponse(callback.ID, "Ошибка при получении задания.")
+			return
+		}
+
+		reward := CalculateReward(task.Category)
+
+		// Обновление баланса пользователя
+		err = h.DB.UpdateUserBalance(ctx, int64(task.UserID), reward)
+		if err != nil {
+			h.sendCallbackResponse(callback.ID, "Ошибка при обновлении баланса пользователя.")
+			return
+		}
+
+		// Обновление статуса задачи
+		err = h.DB.UpdateTaskStatus(ctx, int64(taskID), models.StatusApproved)
+		if err != nil {
+			h.sendCallbackResponse(callback.ID, "Ошибка при обновлении статуса задачи.")
+			return
+		}
+
+		h.sendCallbackResponse(callback.ID, "Задание одобрено.")
+
+		// Уведомление пользователя
+		msg := tgbotapi.NewMessage(int64(task.ID), "Ваше задание одобрено! Вам начислено "+fmt.Sprintf("%.2f", reward)+" руб.")
+		h.Bot.Send(msg)
+
+		// Удаление клавиатуры после одобрения
+		err = h.removeInlineKeyboard(callback.Message.Chat.ID, callback.Message.MessageID)
+		if err != nil {
+			fmt.Printf("Ошибка при удалении inline клавиатуры: %v\n", err)
+		}
+
+	case "reject":
+		// Обновление статуса задачи
+		err = h.DB.UpdateTaskStatus(ctx, int64(taskID), models.StatusRejected)
+		if err != nil {
+			h.sendCallbackResponse(callback.ID, "Ошибка при отклонении задания.")
+			return
+		}
+
+		h.sendCallbackResponse(callback.ID, "Задание отклонено.")
+
+		// Удаление клавиатуры после отклонения
+		err = h.removeInlineKeyboard(callback.Message.Chat.ID, callback.Message.MessageID)
+		if err != nil {
+			fmt.Printf("Ошибка при удалении inline клавиатуры: %v\n", err)
+		}
+
+	default:
+		h.sendCallbackResponse(callback.ID, "Неизвестное действие.")
+	}
+}
+
+func (h *Handler) sendCallbackResponse(callbackID, message string) {
+	callbackConfig := tgbotapi.NewCallback(callbackID, message)
+	if _, err := h.Bot.Request(callbackConfig); err != nil {
+		fmt.Printf("Ошибка при отправке ответа на CallbackQuery: %v\n", err)
+	}
+}
+
+// removeInlineKeyboard удаляет inline клавиатуру из сообщения
+func (h *Handler) removeInlineKeyboard(chatID int64, messageID int) error {
+	editMsg := tgbotapi.NewEditMessageReplyMarkup(chatID, messageID, tgbotapi.InlineKeyboardMarkup{})
+	_, err := h.Bot.Request(editMsg)
+	return err
+}
+
+func (h *Handler) StartTaskStep(ctx context.Context, update tgbotapi.Update, delay time.Duration) {
+
+	// Сохранение времени доступности следующего шага
+	h.DB.SetUserAvailableAt(ctx, update.Message.From.ID)
+
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Следующий шаг будет доступен через %v минут.", delay.Minutes()))
 	h.Bot.Send(msg)
 }
 
@@ -315,168 +504,4 @@ func (h *Handler) HandleScreenshot(ctx context.Context, update tgbotapi.Update) 
 		log.Println("Ошибка при обновлении скриншотов:", err)
 		return
 	}
-}
-
-///////////////////////////////////////////////////
-
-func (h *Handler) ShowCompletedTasks(ctx context.Context, chatID int64, telegramID int64) {
-	var userID int
-	err := h.DB.QueryRowContext(ctx, "SELECT id FROM users WHERE telegram_id=$1", telegramID).Scan(&userID)
-	if err != nil {
-		log.Println("Ошибка при получении user ID:", err)
-		msg := tgbotapi.NewMessage(chatID, "Не удалось найти ваш профиль.")
-		h.Bot.Send(msg)
-		return
-	}
-
-	rows, err := h.DB.QueryContext(ctx, `
-        SELECT tasks.description, user_tasks.status, user_tasks.last_updated
-        FROM user_tasks
-        JOIN tasks ON user_tasks.task_id = tasks.id
-        WHERE user_tasks.user_id = $1 AND user_tasks.status = ANY($2)ORDER BY user_tasks.last_updated DESC
-        LIMIT 10
-    `, userID, []string{"verified_correct", "verified_incorrect", "completed"})
-	if err != nil {
-		log.Println("Ошибка при получении выполненных заданий:", err)
-		msg := tgbotapi.NewMessage(chatID, "Не удалось получить выполненные задания.")
-		h.Bot.Send(msg)
-		return
-	}
-	defer rows.Close()
-
-	var response string
-	for rows.Next() {
-		var description, status, lastUpdated string
-		err := rows.Scan(&description, &status, &lastUpdated)
-		if err != nil {
-			log.Println("Ошибка при сканировании задания:", err)
-			continue
-		}
-		response += fmt.Sprintf("Задание: %s\nСтатус: %s\nДата: %s\n\n", description, status, lastUpdated)
-	}
-
-	if response == "" {
-		response = "У вас нет выполненных заданий."
-	}
-
-	msg := tgbotapi.NewMessage(chatID, response)
-	h.Bot.Send(msg)
-}
-
-func (h *Handler) HandleShowCompletedTasks(ctx context.Context, update tgbotapi.Update) {
-	telegramID := update.Message.From.ID
-	chatID := update.Message.Chat.ID
-	h.ShowCompletedTasks(ctx, chatID, telegramID)
-}
-
-func (h *Handler) HandleSelectTaskType(ctx context.Context, update tgbotapi.Update) {
-	keyboard := tgbotapi.NewReplyKeyboard(
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Авито"),
-			tgbotapi.NewKeyboardButton("Яндекс"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Гугл"),
-			tgbotapi.NewKeyboardButton("2GIS"),
-		),
-		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("Назад"),
-		),
-	)
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Выберите тип задания:")
-	msg.ReplyMarkup = keyboard
-	h.Bot.Send(msg)
-
-	// Установка состояния пользователя
-	h.DB.SetUserState(ctx, update.Message.From.ID, "awaiting_task_type")
-}
-
-func (h *Handler) HandleTaskTypeSelection(ctx context.Context, update tgbotapi.Update) {
-	taskType := update.Message.Text
-
-	if taskType == "Назад" {
-		// Возврат в главное меню
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Главное меню:")
-		msg.ReplyMarkup = h.AdminMenu // Используем h.AdminMenu вместо keyboard
-		h.Bot.Send(msg)
-		h.DB.SetUserState(ctx, update.Message.From.ID, "")
-		return
-	}
-
-	// Получение доступных заданий данного типа
-	task, err := h.DB.GetAvailableTaskByType(ctx, taskType)
-	if err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "К сожалению, задания этого типа недоступны. Попробуйте выбрать другой тип.")
-		h.Bot.Send(msg)
-		return
-	}
-
-	if task == nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Нет доступных заданий данного типа.")
-		h.Bot.Send(msg)
-		return
-	}
-
-	// Назначение задания пользователю
-	err = h.DB.AssignTaskToUser(ctx, update.Message.From.ID, int64(task.ID))
-	if err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при назначении задания. Попробуйте позже.")
-		h.Bot.Send(msg)
-		return
-	}
-
-	// Сброс состояния пользователя
-	h.DB.SetUserState(ctx, update.Message.From.ID, "")
-
-	// Отправка задания пользователю
-	taskMessage := fmt.Sprintf("Ваше задание:\n\n%s", task.Category)
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, taskMessage)
-	h.Bot.Send(msg)
-}
-
-func (h *Handler) ApproveTask(ctx context.Context, taskID int) {
-	// Получение задания из базы данных
-	task, err := h.DB.GetTaskByID(ctx, int64(taskID))
-	if err != nil {
-		// Обработка ошибки
-		return
-	}
-
-	// Определение суммы вознаграждения
-	var reward float64
-	switch task.Category {
-	case "Авито":
-		reward = 130.0
-	case "Яндекс", "Гугл", "2GIS":
-		reward = 25.0
-	default:
-		reward = 0.0
-	}
-
-	// Начисление вознаграждения пользователю
-	err = h.DB.UpdateUserBalance(ctx, int64(task.ID), reward)
-	if err != nil {
-		// Обработка ошибки
-		return
-	}
-
-	// Обновление статуса задания
-	err = h.DB.UpdateTaskStatus(ctx, int64(task.ID), "Approved")
-	if err != nil {
-		// Обработка ошибки
-		return
-	}
-
-	// Уведомление пользователя
-	msg := tgbotapi.NewMessage(int64(task.ID), "Ваше задание одобрено! Вам начислено "+fmt.Sprintf("%.2f", reward)+" руб.")
-	h.Bot.Send(msg)
-}
-
-func (h *Handler) StartTaskStep(ctx context.Context, update tgbotapi.Update, delay time.Duration) {
-
-	// Сохранение времени доступности следующего шага
-	h.DB.SetUserAvailableAt(ctx, update.Message.From.ID)
-
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Следующий шаг будет доступен через %v минут.", delay.Minutes()))
-	h.Bot.Send(msg)
 }

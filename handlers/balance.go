@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"telegram_bot/models"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -33,7 +34,7 @@ func (h *Handler) HandleWithdrawRequest(ctx context.Context, update tgbotapi.Upd
 	userID := update.Message.From.ID
 
 	// Получение баланса пользователя
-	user, err := h.DB.GetUserByID(ctx, userID)
+	user, err := h.DB.GetUserByTelegramID(ctx, userID)
 	if err != nil || user.Balance <= 0 {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "У вас недостаточно средств для вывода.")
 		h.Bot.Send(msg)
@@ -45,7 +46,7 @@ func (h *Handler) HandleWithdrawRequest(ctx context.Context, update tgbotapi.Upd
 	h.Bot.Send(msg)
 
 	// Установка состояния пользователя
-	h.DB.SetUserState(ctx, userID, "awaiting_card_number")
+	h.DB.SetUserState(ctx, userID, string(models.StateAwaitingCardNumder))
 }
 
 func (h *Handler) HandleCardNumberReceived(ctx context.Context, update tgbotapi.Update) {
@@ -56,7 +57,7 @@ func (h *Handler) HandleCardNumberReceived(ctx context.Context, update tgbotapi.
 	// ...
 
 	// Получение баланса пользователя
-	user, err := h.DB.GetUserByID(ctx, userID)
+	user, err := h.DB.GetUserByTelegramID(ctx, userID)
 	if err != nil {
 		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка. Попробуйте позже.")
 		h.Bot.Send(msg)
@@ -93,7 +94,7 @@ func (h *Handler) HandleCardNumberReceived(ctx context.Context, update tgbotapi.
 	}
 
 	// Сброс состояния пользователя
-	h.DB.SetUserState(ctx, userID, "")
+	h.DB.SetUserState(ctx, userID, string(models.StateNone))
 
 	// Уведомление пользователя
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ваш запрос на вывод средств отправлен администратору.")

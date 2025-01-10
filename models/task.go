@@ -1,13 +1,18 @@
 // models/task.go
 package models
 
+import (
+	"time"
+)
+
 type Task struct {
 	ID               int
-	Category         string
+	UserID           int
+	Category         Category
 	Description      string
-	Link             string
 	IsActive         bool
-	CreatedAt        string
-	Status           string
+	CreatedAt        time.Time
+	Status           Status
+	Link             string
 	ScreenshotFileID string
 }
